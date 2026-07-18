@@ -1140,8 +1140,14 @@ async function boot(){
   if(session) await onLogin(); else showLogin();
 }
 sb.auth.onAuthStateChange((event)=>{ if(event==='SIGNED_OUT') showLogin(); });
-function showLogin(){ $('app').classList.add('hidden'); $('loginView').classList.remove('hidden'); $('liPass').value=''; }
-function showApp(){ $('loginView').classList.add('hidden'); $('app').classList.remove('hidden'); setTimeout(()=>map.invalidateSize(),60); }
+function closeAllModals(){
+  document.querySelectorAll('.modalbg.open').forEach(m=>m.classList.remove('open'));
+  ['acOld','acNew','acNew2','frNew','frNew2','liPass'].forEach(id=>{const el=$(id); if(el) el.value='';});
+  const tp=$('tempPwBox'); if(tp) tp.classList.add('hidden');
+  const ae=$('acErr'); if(ae){ ae.textContent=''; ae.style.color=''; }
+}
+function showLogin(){ closeAllModals(); $('forceReset').classList.add('hidden'); $('app').classList.add('hidden'); $('loginView').classList.remove('hidden'); $('liPass').value=''; }
+function showApp(){ closeAllModals(); $('loginView').classList.add('hidden'); $('app').classList.remove('hidden'); setTimeout(()=>map.invalidateSize(),60); }
 
 async function doLogin(){
   $('liError').textContent=''; $('liMsg').textContent='';
@@ -1636,7 +1642,7 @@ $('abSave').onclick=addBusiness;
 $('acctBtn').onclick=()=>{$('acctWho').textContent=`${me.full_name||me.email} · ${me.email} · role: ${me.role}`;$('acErr').textContent='';$('acctModal').classList.add('open');};
 $('acClose').onclick=()=>$('acctModal').classList.remove('open');
 $('acSave').onclick=changePassword;
-$('acSignOut').onclick=async()=>{ await sb.auth.signOut(); };
+$('acSignOut').onclick=async()=>{ closeAllModals(); me=null; await sb.auth.signOut(); };
 $('usersBtn').onclick=openUsers;
 $('usersClose').onclick=()=>$('usersModal').classList.remove('open');
 $('nuAdd').onclick=createUser;
