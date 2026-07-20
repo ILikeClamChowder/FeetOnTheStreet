@@ -911,6 +911,11 @@ svg.leaflet-image-layer.leaflet-interactive path {
   .logbox .ff{flex:1;min-width:96px;display:flex;flex-direction:column;font-size:11px;color:var(--muted);gap:3px}
   .logbox input,.logbox select,.logbox textarea{padding:6px 8px;border:1px solid var(--line);border-radius:7px;width:100%;background:#fff}
   .logbox textarea{min-height:38px;resize:vertical}
+  .savednames{font-size:11px;color:var(--muted);margin:-2px 0 7px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+  .nchip{background:#fff;border:1px solid var(--line);border-radius:12px;padding:2px 5px 2px 9px;display:inline-flex;align-items:center;gap:5px;color:var(--ink);cursor:pointer;font-size:12px}
+  .nchip:hover{border-color:var(--navy)}
+  .nchip .nx{color:#b0392f;font-weight:700;cursor:pointer;line-height:1;padding:0 3px;border-radius:8px}
+  .nchip .nx:hover{background:#fdeceb;color:#7a1f18}
   .visit{display:flex;gap:9px;padding:8px 0;border-bottom:1px solid var(--line);font-size:13px}
   .visit:last-child{border-bottom:0}
   .visit .vd{flex:none;width:64px;color:var(--navy-dark);font-weight:600;font-size:12px}
@@ -1241,6 +1246,7 @@ let visitsByBiz={};           // business_id -> [visit rows] (newest first)
 let APPTS=[];                 // all appointment rows
 let AGENTS=[];                // profiles excluding owner(s) — the pickable agents
 let calMonth=null;            // Date for the month shown in the calendar
+let AGENT_NAMES=[];           // saved account-less agent names [{id,name}]
 
 function todayStr(){const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;}
 function fmtDate(s){ if(!s) return ''; const d=new Date(s+'T00:00:00'); return d.toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'}); }
@@ -1253,6 +1259,28 @@ function agentOptions(chosen){
   const sel = (chosen===undefined) ? def : chosen;
   return `<option value="">— select agent —</option>`+
     AGENTS.map(a=>`<option value="${a.id}" ${a.id===sel?'selected':''}>${esc(a.full_name||a.email)}</option>`).join('');
+}
+// ---- visit agent picker: account holders + typed-in names, last choice remembered ----
+function lastAgent(){ try{ return localStorage.getItem('fots_last_agent')||''; }catch(e){ return ''; } }
+function setLastAgent(v){ try{ localStorage.setItem('fots_last_agent', v||''); }catch(e){} }
+function defaultAgent(){
+  const last=lastAgent(); if(last) return last;
+  if(me && me.role!=='owner') return me.full_name||me.email||'';
+  return '';
+}
+function agentNameOptions(){   // <option>s for the <datalist> (accounts + saved names)
+  const seen=new Set(), out=[];
+  const add=nm=>{ nm=(nm||'').trim(); const k=nm.toLowerCase(); if(nm&&!seen.has(k)){ seen.add(k); out.push(`<option value="${attr(nm)}">`); } };
+  AGENTS.forEach(a=>add(a.full_name||a.email));
+  AGENT_NAMES.forEach(a=>add(a.name));
+  return out.join('');
+}
+function customAgentChips(){   // deletable chips for typed-in (account-less) names
+  const acc=new Set(AGENTS.map(a=>(a.full_name||a.email||'').trim().toLowerCase()));
+  const customs=AGENT_NAMES.filter(a=>a.name&&!acc.has(a.name.trim().toLowerCase()));
+  if(!customs.length) return '';
+  return `<div class="savednames">Saved names: ${customs.map(a=>
+    `<span class="nchip" data-fill="${attr(a.name)}">${esc(a.name)}<span class="nx" data-delname="${a.id}" title="Delete this name">×</span></span>`).join('')}</div>`;
 }
 
 const LEVEL_COLOR={'A':'#1b8a3f','A/B':'#5a9e1e','B':'#e58a00','B/C':'#d1590c','C':'#c62828'};
@@ -1420,12 +1448,13 @@ function applyRoleUI(){
 }
 
 async function loadData(){
-  const [{data:bz,error:be},{data:cm},{data:pr},{data:vs},{data:ap}]=await Promise.all([
+  const [{data:bz,error:be},{data:cm},{data:pr},{data:vs},{data:ap},{data:an}]=await Promise.all([
     sb.from('businesses').select('*').order('name'),
     sb.from('comments').select('*').order('created_at'),
     sb.from('profiles').select('id,full_name,email,role'),
     sb.from('visits').select('*').order('visited_on',{ascending:false}),
-    sb.from('appointments').select('*').order('scheduled_at')
+    sb.from('appointments').select('*').order('scheduled_at'),
+    sb.from('agent_names').select('id,name').order('name')
   ]);
   if(be){ alert('Could not load businesses: '+be.message); return; }
   BUSINESSES=bz||[];
@@ -1437,6 +1466,7 @@ async function loadData(){
   AGENTS=(pr||[]).filter(p=>p.role!=='owner');
   visitsByBiz={}; (vs||[]).forEach(v=>{(visitsByBiz[v.business_id]=visitsByBiz[v.business_id]||[]).push(v);});
   APPTS=ap||[];
+  AGENT_NAMES=an||[];
   cluster.clearLayers();
   for(const k in markers) delete markers[k];
   BUSINESSES.forEach(b=>makeMarker(b.id));
@@ -1628,8 +1658,9 @@ function renderBody(id,editing){
       ${canEdit()?`<div class="logbox">
         <div class="lr">
           <div class="ff">Date visited<input id="lvDate" type="date" value="${todayStr()}"></div>
-          <div class="ff">Agent<select id="lvAgent">${agentOptions()}</select></div>
+          <div class="ff">Agent<input id="lvAgent" list="lvAgentDL" autocomplete="off" placeholder="Type or pick a name" value="${attr(defaultAgent())}"><datalist id="lvAgentDL">${agentNameOptions()}</datalist></div>
         </div>
+        ${customAgentChips()}
         <div class="lr"><div class="ff" style="min-width:100%">Note (optional)<textarea id="lvNote" placeholder="How did it go?"></textarea></div></div>
         <div class="lr">
           <div class="ff">Set follow-up (optional)<input id="lvFollow" type="date"></div>
@@ -1657,6 +1688,8 @@ function renderBody(id,editing){
     const lv=$('lvSave'); if(lv) lv.onclick=()=>logVisit(id);
     const sc=$('schedBtn'); if(sc) sc.onclick=()=>openAppt(id);
     document.querySelectorAll('#visitList [data-delvisit]').forEach(x=>x.onclick=()=>delVisit(id,+x.dataset.delvisit));
+    document.querySelectorAll('#dBody [data-fill]').forEach(el=>el.onclick=()=>{const inp=$('lvAgent'); if(inp) inp.value=el.dataset.fill;});
+    document.querySelectorAll('#dBody [data-delname]').forEach(el=>el.onclick=e=>{e.stopPropagation(); delAgentName(+el.dataset.delname);});
   }
   if(gkey && gphoto[id]===undefined && c.lat!=null) fetchStorefront(id,c.lat,c.lng);
 }
@@ -1752,19 +1785,41 @@ function apptRow(a){
 }
 async function logVisit(id){
   if(!canEdit()) return;
-  const date=$('lvDate').value, agent_id=$('lvAgent').value||null, note=$('lvNote').value.trim()||null, follow=$('lvFollow').value||null;
+  const date=$('lvDate').value, follow=$('lvFollow').value||null, note=$('lvNote').value.trim()||null;
+  const raw=($('lvAgent').value||'').trim();
   if(!date){ alert('Pick the date visited.'); return; }
+  // resolve the typed value: an account holder (by name) -> agent_id; otherwise a saved name
+  let agent_id=null, agent_name=null;
+  if(raw){
+    const acc=AGENTS.find(a=>(a.full_name||a.email||'').trim().toLowerCase()===raw.toLowerCase());
+    if(acc) agent_id=acc.id; else agent_name=raw;
+  }
   const btn=$('lvSave'); btn.disabled=true; btn.textContent='Saving…';
-  const {data,error}=await sb.from('visits').insert({business_id:id,visited_on:date,agent_id,note,created_by:me.id}).select().single();
+  const {data,error}=await sb.from('visits').insert({business_id:id,visited_on:date,agent_id,agent_name,note,created_by:me.id}).select().single();
   if(error){ btn.disabled=false; btn.textContent='✓ Log visit'; alert('Could not log visit: '+error.message); return; }
   (visitsByBiz[id]=visitsByBiz[id]||[]).unshift(data);
+  // a brand-new typed name is saved so it stays an option (and is deletable) later
+  if(agent_name && !AGENT_NAMES.some(a=>a.name.trim().toLowerCase()===agent_name.toLowerCase())){
+    const {data:an}=await sb.from('agent_names').insert({name:agent_name,created_by:me.id}).select().maybeSingle();
+    if(an) AGENT_NAMES.push(an);
+  }
+  setLastAgent(raw);   // remember this pick as the default next time
   const b=BASE[id], patch={};
   if(!b.last_visit || date>b.last_visit) patch.last_visit=date;
   if(!b.first_visit || date<b.first_visit) patch.first_visit=date;
-  if(agent_id) patch.agent=profName[agent_id]||b.agent;
+  if(raw) patch.agent=raw;
   if(follow) patch.follow_up_on=follow;
   if(Object.keys(patch).length){ await sb.from('businesses').update(patch).eq('id',id); Object.assign(b,patch); }
   ensureMarker(id); applyFilters(); renderBody(id,false);
+}
+async function delAgentName(nid){
+  const a=AGENT_NAMES.find(x=>x.id===nid); if(!a) return;
+  if(!confirm(`Delete the saved name "${a.name}"? Past visits keep it; it just stops showing as an option.`)) return;
+  const {error}=await sb.from('agent_names').delete().eq('id',nid);
+  if(error){ alert('Could not delete: '+error.message); return; }
+  AGENT_NAMES=AGENT_NAMES.filter(x=>x.id!==nid);
+  if(lastAgent().toLowerCase()===a.name.trim().toLowerCase()) setLastAgent('');
+  if(activeId!=null) renderBody(activeId,false);
 }
 async function delVisit(id,vid){
   if(!confirm('Remove this visit?')) return;
