@@ -927,6 +927,12 @@ svg.leaflet-image-layer.leaflet-interactive path {
   .appt{display:flex;gap:9px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--line);font-size:13px}
   .appt:last-child{border-bottom:0}
   .appt .ad{flex:none;width:104px;font-weight:600;color:var(--navy-dark);font-size:12px}
+  .apptctrl{flex:none;display:flex;gap:8px;align-items:flex-start}
+  .apptctrl .mini{font-size:11.5px;color:var(--navy);cursor:pointer}
+  .apptctrl .mini:hover{text-decoration:underline}
+  .apptctrl .mini.del{color:#c0505a}
+  .btn.danger{background:#fbeceb;color:#b0392f}
+  .btn.danger:hover{background:#f6d9d6}
   .badge.clientbadge{background:var(--a)}
 
   /* ---------- full-screen panels: analytics + calendar ---------- */
@@ -1179,7 +1185,7 @@ svg.leaflet-image-layer.leaflet-interactive path {
 <!-- schedule appointment modal -->
 <div id="apptModal" class="modalbg">
   <div class="modal-card">
-    <h3>Schedule an appointment</h3>
+    <h3 id="apptTitle">Schedule an appointment</h3>
     <p id="apptFor"></p>
     <label>Date</label><input id="apDate" type="date">
     <label>Time</label><input id="apTime" type="time">
@@ -1680,14 +1686,17 @@ function renderBody(id,editing){
       <div id="cmtList">${cs.map(c=>`<div class="cmt"><div class="meta"><b>${esc(profName[c.author_id]||'Someone')}</b> · ${new Date(c.created_at).toLocaleDateString()}</div>${esc(c.body)}</div>`).join('')||'<div style="font-size:13px;color:#8894a2">No comments yet.</div>'}</div>
       ${canEdit()?`<div class="addcmt"><textarea id="cmtText" placeholder="Leave a note for the team…"></textarea><div style="display:flex;gap:8px"><button class="btn" id="addCmt">Post comment</button></div></div>`:''}
     </div>
-    ${canEdit()?`<div class="drow"><button class="btn ghost" id="editBtn">✎ Edit details</button></div>`:''}`;
+    ${canEdit()?`<div class="drow"><button class="btn ghost" id="editBtn">✎ Edit details</button>${isAdmin()?`<button class="btn danger" id="delBiz">🗑 Delete business</button>`:''}</div>`:''}`;
   if(canEdit()){
     $('addCmt').onclick=()=>addComment(id);
     $('editBtn').onclick=()=>renderBody(id,true);
     const mp=$('movePin'); if(mp) mp.onclick=()=>startPlacing(id);
     const lv=$('lvSave'); if(lv) lv.onclick=()=>logVisit(id);
     const sc=$('schedBtn'); if(sc) sc.onclick=()=>openAppt(id);
+    const db=$('delBiz'); if(db) db.onclick=()=>deleteBusiness(id);
     document.querySelectorAll('#visitList [data-delvisit]').forEach(x=>x.onclick=()=>delVisit(id,+x.dataset.delvisit));
+    document.querySelectorAll('#apptList [data-editappt]').forEach(x=>x.onclick=()=>editAppt(+x.dataset.editappt));
+    document.querySelectorAll('#apptList [data-delappt]').forEach(x=>x.onclick=()=>delAppt(+x.dataset.delappt));
     document.querySelectorAll('#dBody [data-fill]').forEach(el=>el.onclick=()=>{const inp=$('lvAgent'); if(inp) inp.value=el.dataset.fill;});
     document.querySelectorAll('#dBody [data-delname]').forEach(el=>el.onclick=e=>{e.stopPropagation(); delAgentName(+el.dataset.delname);});
   }
@@ -1780,8 +1789,10 @@ function visitRow(v){
 }
 function apptRow(a){
   const nm=a.agent_id?(profName[a.agent_id]||''):'';
+  const canDel = me && (a.created_by===me.id || isAdmin());
+  const ctrl = canEdit()?`<div class="apptctrl"><span class="mini" data-editappt="${a.id}">Edit</span>${canDel?`<span class="mini del" data-delappt="${a.id}">Remove</span>`:''}</div>`:'';
   return `<div class="appt"><div class="ad">${fmtDateTime(a.scheduled_at)}</div>
-    <div style="flex:1;min-width:0"><b>${esc(a.title||'Appointment')}</b>${nm?` · ${esc(nm)}`:''}${a.note?`<div style="font-size:12px;color:#5b6672">${esc(a.note)}</div>`:''}</div></div>`;
+    <div style="flex:1;min-width:0"><b>${esc(a.title||'Appointment')}</b>${nm?` · ${esc(nm)}`:''}${a.note?`<div style="font-size:12px;color:#5b6672">${esc(a.note)}</div>`:''}</div>${ctrl}</div>`;
 }
 async function logVisit(id){
   if(!canEdit()) return;
@@ -1808,7 +1819,9 @@ async function logVisit(id){
   if(!b.last_visit || date>b.last_visit) patch.last_visit=date;
   if(!b.first_visit || date<b.first_visit) patch.first_visit=date;
   if(raw) patch.agent=raw;
-  if(follow) patch.follow_up_on=follow;
+  if(follow) patch.follow_up_on=follow;                 // a new follow-up date wins outright
+  else if(b.follow_up_on && confirm(`This business had a follow-up set for ${fmtDate(b.follow_up_on)}. Mark it done and clear it?`))
+    patch.follow_up_on=null;
   if(Object.keys(patch).length){ await sb.from('businesses').update(patch).eq('id',id); Object.assign(b,patch); }
   ensureMarker(id); applyFilters(); renderBody(id,false);
 }
@@ -1831,12 +1844,27 @@ async function delVisit(id,vid){
   await sb.from('businesses').update(patch).eq('id',id); Object.assign(b,patch);
   ensureMarker(id); applyFilters(); renderBody(id,false);
 }
-let apptBizId=null;
+let apptBizId=null, apptEditId=null;
 function openAppt(id){
-  apptBizId=id; $('apErr').textContent='';
+  apptBizId=id; apptEditId=null; $('apErr').textContent='';
+  $('apptTitle').textContent='Schedule an appointment';
   $('apptFor').textContent='For '+biz(id).name;
   $('apDate').value=todayStr(); $('apTime').value='09:00';
   $('apAgent').innerHTML=agentOptions(); $('apTitle').value=''; $('apNote').value='';
+  $('apSave').textContent='Schedule';
+  $('apptModal').classList.add('open');
+}
+function editAppt(aid){
+  const a=APPTS.find(x=>x.id===aid); if(!a) return;
+  apptBizId=a.business_id; apptEditId=aid; $('apErr').textContent='';
+  const dt=new Date(a.scheduled_at);
+  const pad=n=>String(n).padStart(2,'0');
+  $('apptTitle').textContent='Edit appointment';
+  $('apptFor').textContent='For '+biz(a.business_id).name;
+  $('apDate').value=`${dt.getFullYear()}-${pad(dt.getMonth()+1)}-${pad(dt.getDate())}`;
+  $('apTime').value=`${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+  $('apAgent').innerHTML=agentOptions(a.agent_id||''); $('apTitle').value=a.title||''; $('apNote').value=a.note||'';
+  $('apSave').textContent='Save changes';
   $('apptModal').classList.add('open');
 }
 async function saveAppt(){
@@ -1845,13 +1873,38 @@ async function saveAppt(){
   const d=$('apDate').value, t=$('apTime').value||'09:00';
   if(!d){ $('apErr').textContent='Pick a date.'; return; }
   const iso=new Date(`${d}T${t}`).toISOString();
-  $('apSave').disabled=true; $('apSave').textContent='Saving…';
-  const {data,error}=await sb.from('appointments').insert({business_id:apptBizId,agent_id:$('apAgent').value||null,scheduled_at:iso,title:$('apTitle').value.trim()||null,note:$('apNote').value.trim()||null,created_by:me.id}).select().single();
-  $('apSave').disabled=false; $('apSave').textContent='Schedule';
-  if(error){ $('apErr').textContent=error.message; return; }
-  APPTS.push(data);
+  const rec={business_id:apptBizId,agent_id:$('apAgent').value||null,scheduled_at:iso,title:$('apTitle').value.trim()||null,note:$('apNote').value.trim()||null};
+  $('apSave').disabled=true; const lbl=$('apSave').textContent; $('apSave').textContent='Saving…';
+  let res;
+  if(apptEditId!=null) res=await sb.from('appointments').update(rec).eq('id',apptEditId).select().single();
+  else res=await sb.from('appointments').insert({...rec,created_by:me.id}).select().single();
+  $('apSave').disabled=false; $('apSave').textContent=lbl;
+  if(res.error){ $('apErr').textContent=res.error.message; return; }
+  if(apptEditId!=null){ const i=APPTS.findIndex(x=>x.id===apptEditId); if(i>=0) APPTS[i]=res.data; }
+  else APPTS.push(res.data);
   $('apptModal').classList.remove('open');
   if(activeId===apptBizId) renderBody(apptBizId,false);
+}
+async function delAppt(aid){
+  const a=APPTS.find(x=>x.id===aid); if(!a) return;
+  if(!confirm('Remove this appointment?')) return;
+  const {error}=await sb.from('appointments').delete().eq('id',aid);
+  if(error){ alert('Could not remove: '+error.message); return; }
+  APPTS=APPTS.filter(x=>x.id!==aid);
+  if(activeId!=null) renderBody(activeId,false);
+}
+async function deleteBusiness(id){
+  if(!isAdmin()) return;
+  const b=biz(id);
+  if(!confirm(`Delete "${b.name}"?\n\nThis permanently removes the business and all of its visits, comments, and appointments. This cannot be undone.`)) return;
+  const {error}=await sb.from('businesses').delete().eq('id',id);
+  if(error){ alert('Could not delete: '+error.message); return; }
+  if(markers[id]){ cluster.removeLayer(markers[id]); delete markers[id]; }
+  delete BASE[id]; delete visitsByBiz[id]; delete commentsByBiz[id];
+  BUSINESSES=BUSINESSES.filter(x=>x.id!==id);
+  APPTS=APPTS.filter(a=>a.business_id!==id);
+  closeDetail();
+  buildFilterOptions(); applyFilters(); refreshStat();
 }
 
 /* ===== analytics ===== */
