@@ -1875,34 +1875,26 @@ function renderAnalytics(){
   const inMonth=(s,mk)=>s&&monthKey(new Date(s+'T00:00:00'))===mk;
   const visitedThisMonth=new Set(visits.filter(v=>inMonth(v.visited_on,thisMK)).map(v=>v.business_id)).size;
   const newBizThisMonth=BUSINESSES.filter(b=>b.created_at&&monthKey(new Date(b.created_at))===thisMK).length;
-  const newClientsThisMonth=BUSINESSES.filter(b=>inMonth(b.became_client_on,thisMK)).length;
   const followDue=BUSINESSES.filter(b=>b.follow_up_on&&b.follow_up_on<=today).sort((a,b)=>a.follow_up_on.localeCompare(b.follow_up_on));
   const upcomingAppts=APPTS.filter(a=>a.status!=='canceled'&&new Date(a.scheduled_at)>=new Date(Date.now()-864e5));
-  const totalClients=BUSINESSES.filter(b=>b.is_client).length;
   const since=new Date(Date.now()-90*864e5);
   const recent=visits.filter(v=>v.visited_on&&new Date(v.visited_on+'T00:00:00')>=since);
   const byAgent=topRows(countBy(recent,v=>v.agent_id?(profName[v.agent_id]||'Unknown'):(v.agent_name||'Unknown')),12);
   const byCity=topRows(countBy(recent,v=>{const b=BASE[v.business_id];return b?(b.city||'—'):'—';}),10);
   const mos=lastMonths(6);
-  const clientsByMo=mos.map(k=>({label:monthLabel(k),value:BUSINESSES.filter(b=>inMonth(b.became_client_on,k)).length}));
   const visitsByMo=mos.map(k=>({label:monthLabel(k),value:visits.filter(v=>inMonth(v.visited_on,k)).length}));
   $('anBody').innerHTML=`
     <div class="statgrid">
       <div class="statcard"><div class="n">${visitedThisMonth}</div><div class="l">Businesses visited this month</div></div>
       <div class="statcard"><div class="n">${newBizThisMonth}</div><div class="l">New businesses this month</div></div>
-      <div class="statcard"><div class="n">${newClientsThisMonth}</div><div class="l">New clients this month</div></div>
       <div class="statcard"><div class="n">${upcomingAppts.length}</div><div class="l">Appointments set (upcoming)</div></div>
       <div class="statcard ${followDue.length?'warn':''}"><div class="n">${followDue.length}</div><div class="l">Follow-ups due</div></div>
-      <div class="statcard"><div class="n">${totalClients}</div><div class="l">Signed clients (total)</div></div>
     </div>
     <div class="grid2">
       <div class="chartcard"><h3>Visits by agent · last 90 days</h3>${hbars(byAgent)}</div>
       <div class="chartcard"><h3>Visits by city · last 90 days</h3>${hbars(byCity)}</div>
     </div>
-    <div class="grid2">
-      <div class="chartcard"><h3>Visits per month</h3>${vbars(visitsByMo)}</div>
-      <div class="chartcard"><h3>New clients per month</h3>${vbars(clientsByMo)}</div>
-    </div>
+    <div class="chartcard"><h3>Visits per month</h3>${vbars(visitsByMo)}</div>
     <div class="chartcard"><h3>Follow-ups due (${followDue.length})</h3>
       <div class="anlist">${followDue.length?followDue.map(b=>`<div class="ar" data-openbiz="${b.id}"><span>${esc(b.name)}${b.level?(' · '+b.level):''}</span><span>${fmtDate(b.follow_up_on)}</span></div>`).join(''):'<div class="empty">Nothing due right now.</div>'}</div></div>`;
   $('anBody').querySelectorAll('[data-openbiz]').forEach(el=>el.onclick=()=>jumpToBiz(+el.dataset.openbiz,'analyticsModal'));
