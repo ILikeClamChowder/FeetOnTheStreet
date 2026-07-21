@@ -1303,6 +1303,7 @@ function isOwner(){return me&&me.role==='owner';}
 function canEdit(){return me && (NONOWNER_VIEW_ONLY ? me.role==='owner' : ['editor','admin','owner'].includes(me.role));}
 function canDelete(){return NONOWNER_VIEW_ONLY ? isOwner() : isAdmin();}
 function canSeeCalendar(){return NONOWNER_VIEW_ONLY ? isOwner() : true;}
+function canSeeAnalytics(){return NONOWNER_VIEW_ONLY ? isOwner() : true;}
 function biz(id){return BASE[id]||{};}
 function eff(id){const b=BASE[id]||{};return {lat:b.lat,lng:b.lng};}
 function esc(s){return (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
@@ -1455,6 +1456,7 @@ function applyRoleUI(){
   $('userName').textContent=me.full_name||me.email;
   $('roleChip').textContent=me.role;
   $('addBizBtn').style.display=canEdit()?'':'none';
+  $('analyticsBtn').style.display=canSeeAnalytics()?'':'none';
   $('calendarBtn').style.display=canSeeCalendar()?'':'none';
   $('usersBtn').style.display=isAdmin()?'':'none';
   $('photoSettings').style.display=isOwner()?'':'none';
