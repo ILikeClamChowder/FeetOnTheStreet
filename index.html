@@ -1310,11 +1310,24 @@ function esc(s){return (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;'
 function attr(s){return esc(s).replace(/'/g,'&#39;');}
 
 /* ===== auth ===== */
+let recovering=false;   // true while a password-reset ("forgot password") link is being completed
 async function boot(){
   const {data:{session}}=await sb.auth.getSession();
+  if(recovering) return;                 // a recovery link is taking over
   if(session) await onLogin(); else showLogin();
 }
-sb.auth.onAuthStateChange((event)=>{ if(event==='SIGNED_OUT') showLogin(); });
+sb.auth.onAuthStateChange(async (event)=>{
+  if(event==='SIGNED_OUT'){ showLogin(); return; }
+  if(event==='PASSWORD_RECOVERY'){       // arrived from a reset-password email link
+    recovering=true;
+    try{
+      const {data:{user}}=await sb.auth.getUser();
+      if(user){ const {data:prof}=await sb.from('profiles').select('*').eq('id',user.id).maybeSingle();
+        me=prof||{id:user.id,email:user.email,full_name:user.email,role:'viewer'}; }
+    }catch(e){}
+    showForceReset();
+  }
+});
 function closeAllModals(){
   document.querySelectorAll('.modalbg.open,.bigmodal.open').forEach(m=>m.classList.remove('open'));
   ['acOld','acNew','acNew2','frNew','frNew2','liPass'].forEach(id=>{const el=$(id); if(el) el.value='';});
@@ -1355,8 +1368,12 @@ async function submitForceReset(){
   $('frSubmit').disabled=true; $('frSubmit').textContent='Saving…';
   const {error}=await sb.auth.updateUser({password:np});
   if(error){ $('frErr').textContent=error.message; $('frSubmit').disabled=false; $('frSubmit').textContent='Set password & continue'; return; }
+  if(!me){ const {data:{user}}=await sb.auth.getUser();
+    const {data:prof}=await sb.from('profiles').select('*').eq('id',user.id).maybeSingle();
+    me=prof||{id:user.id,email:user.email,full_name:user.email,role:'viewer'}; }
   await sb.from('profiles').update({must_change_password:false}).eq('id',me.id);
   me.must_change_password=false;
+  if(recovering){ recovering=false; try{ history.replaceState(null,'',location.pathname+location.search); }catch(e){} }
   $('forceReset').classList.add('hidden'); $('frSubmit').disabled=false; $('frSubmit').textContent='Set password & continue';
   await proceedIntoApp();
 }
