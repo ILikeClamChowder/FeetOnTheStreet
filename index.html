@@ -1294,9 +1294,15 @@ function levelColor(l){return LEVEL_COLOR[l]||'#9aa6b2';}
 const LEVEL_ORDER={'A':0,'A/B':1,'B':2,'B/C':3,'C':4,'':9};
 const LEVEL_WEIGHT={'A':5,'A/B':4,'B':3,'B/C':2,'C':1};
 
-function canEdit(){return me&&['editor','admin','owner'].includes(me.role);}
+// While agents edit the data in the Google Sheet, the website is a read-only
+// visualization for everyone except the owner. Flip this to false to restore
+// normal editor/admin editing + the calendar for all staff.
+const NONOWNER_VIEW_ONLY=true;
 function isAdmin(){return me&&['admin','owner'].includes(me.role);}
 function isOwner(){return me&&me.role==='owner';}
+function canEdit(){return me && (NONOWNER_VIEW_ONLY ? me.role==='owner' : ['editor','admin','owner'].includes(me.role));}
+function canDelete(){return NONOWNER_VIEW_ONLY ? isOwner() : isAdmin();}
+function canSeeCalendar(){return NONOWNER_VIEW_ONLY ? isOwner() : true;}
 function biz(id){return BASE[id]||{};}
 function eff(id){const b=BASE[id]||{};return {lat:b.lat,lng:b.lng};}
 function esc(s){return (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
@@ -1449,6 +1455,7 @@ function applyRoleUI(){
   $('userName').textContent=me.full_name||me.email;
   $('roleChip').textContent=me.role;
   $('addBizBtn').style.display=canEdit()?'':'none';
+  $('calendarBtn').style.display=canSeeCalendar()?'':'none';
   $('usersBtn').style.display=isAdmin()?'':'none';
   $('photoSettings').style.display=isOwner()?'':'none';
 }
@@ -1686,7 +1693,7 @@ function renderBody(id,editing){
       <div id="cmtList">${cs.map(c=>`<div class="cmt"><div class="meta"><b>${esc(profName[c.author_id]||'Someone')}</b> · ${new Date(c.created_at).toLocaleDateString()}</div>${esc(c.body)}</div>`).join('')||'<div style="font-size:13px;color:#8894a2">No comments yet.</div>'}</div>
       ${canEdit()?`<div class="addcmt"><textarea id="cmtText" placeholder="Leave a note for the team…"></textarea><div style="display:flex;gap:8px"><button class="btn" id="addCmt">Post comment</button></div></div>`:''}
     </div>
-    ${canEdit()?`<div class="drow"><button class="btn ghost" id="editBtn">✎ Edit details</button>${isAdmin()?`<button class="btn danger" id="delBiz">🗑 Delete business</button>`:''}</div>`:''}`;
+    ${canEdit()?`<div class="drow"><button class="btn ghost" id="editBtn">✎ Edit details</button>${canDelete()?`<button class="btn danger" id="delBiz">🗑 Delete business</button>`:''}</div>`:''}`;
   if(canEdit()){
     $('addCmt').onclick=()=>addComment(id);
     $('editBtn').onclick=()=>renderBody(id,true);
@@ -1782,7 +1789,7 @@ async function addBusiness(){
 
 /* ===== visits + appointments ===== */
 function visitRow(v){
-  const can = me && (v.created_by===me.id || isAdmin());
+  const can = me && canEdit() && (v.created_by===me.id || isAdmin());
   return `<div class="visit"><div class="vd">${fmtDate(v.visited_on)}</div>
     <div class="vmain"><span class="vag">${esc(agentName(v))}</span>${v.note?`<div class="vnote">${esc(v.note)}</div>`:''}</div>
     ${can?`<span class="vdel" data-delvisit="${v.id}">remove</span>`:''}</div>`;
@@ -1894,7 +1901,7 @@ async function delAppt(aid){
   if(activeId!=null) renderBody(activeId,false);
 }
 async function deleteBusiness(id){
-  if(!isAdmin()) return;
+  if(!canDelete()) return;
   const b=biz(id);
   if(!confirm(`Delete "${b.name}"?\n\nThis permanently removes the business and all of its visits, comments, and appointments. This cannot be undone.`)) return;
   const {error}=await sb.from('businesses').delete().eq('id',id);
