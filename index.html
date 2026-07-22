@@ -1489,7 +1489,7 @@ async function loadData(){
     sb.from('agent_names').select('id,name').order('name')
   ]);
   if(be){ alert('Could not load businesses: '+be.message); return; }
-  BUSINESSES=bz||[];
+  BUSINESSES=(bz||[]).filter(b=>!b.hidden);   // rows hidden by the sheet sync (deleted there) don't show
   for(const k in BASE) delete BASE[k];
   BUSINESSES.forEach(b=>BASE[b.id]=b);
   commentsByBiz={};
