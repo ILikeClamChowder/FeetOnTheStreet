@@ -903,7 +903,17 @@ svg.leaflet-image-layer.leaflet-interactive path {
   .urow .you{font-size:10px;background:var(--navy);color:#fff;border-radius:8px;padding:1px 6px;margin-left:6px}
   .urow select{padding:5px 7px;border:1px solid var(--line);border-radius:7px}
   .rolechip2{font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);background:#eef2f7;padding:3px 8px;border-radius:8px}
+  .urow .uedit{flex:0 0 auto}
+  .edittog{font-size:11.5px;padding:5px 10px;border-radius:8px;border:1px solid var(--line);background:#fff;color:var(--muted);cursor:pointer;white-space:nowrap}
+  .edittog:hover{border-color:#b9c4d0}
+  .edittog.on{background:#e7f6ec;border-color:#8fd3a6;color:#1b8a3f;font-weight:600}
+  .editpill{font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);background:#eef2f7;padding:3px 8px;border-radius:8px;white-space:nowrap}
+  .editpill.on{background:#e7f6ec;color:#1b8a3f}
   .urow .uact{display:flex;gap:6px}
+  #updateBar{position:fixed;left:50%;transform:translateX(-50%);bottom:18px;z-index:9999;background:var(--navy);color:#fff;padding:10px 14px;border-radius:10px;box-shadow:0 8px 28px rgba(0,0,0,.28);font-size:13px;display:flex;align-items:center;gap:12px}
+  #updateBar button{background:#fff;color:var(--navy);border:0;border-radius:7px;padding:5px 12px;font-weight:600;cursor:pointer}
+  #liveToast{position:fixed;left:50%;transform:translateX(-50%) translateY(8px);bottom:18px;z-index:9998;background:rgba(20,30,45,.94);color:#fff;padding:9px 14px;border-radius:9px;font-size:12.5px;opacity:0;pointer-events:none;transition:opacity .25s,transform .25s}
+  #liveToast.show{opacity:1;transform:translateX(-50%) translateY(0)}
   .upending{font-size:11px;color:#b26a00;background:#fff6e6;border-radius:4px;padding:1px 6px;margin-left:8px}
 
   /* ---------- visit log + appointments (detail panel) ---------- */
@@ -1297,14 +1307,16 @@ const LEVEL_ORDER={'A':0,'A/B':1,'B':2,'B/C':3,'C':4,'':9};
 const LEVEL_WEIGHT={'A':5,'A/B':4,'B':3,'B/C':2,'C':1};
 
 // While agents edit the data in the Google Sheet, the website is a read-only
-// visualization for everyone except the owner. Flip this to false to restore
-// normal editor/admin editing + the calendar for all staff.
+// visualization by default. The owner always has full access; everyone else is
+// view-only UNLESS the owner flips their "Can edit" switch in the Users panel
+// (profiles.can_edit). Set this to false to restore plain role-based editing.
 const NONOWNER_VIEW_ONLY=true;
 function isAdmin(){return me&&['admin','owner'].includes(me.role);}
 function isOwner(){return me&&me.role==='owner';}
-function canEdit(){return me && (NONOWNER_VIEW_ONLY ? me.role==='owner' : ['editor','admin','owner'].includes(me.role));}
+function grantedEdit(){return !!(me&&me.can_edit);}   // owner-granted, per-user edit access
+function canEdit(){ if(!me) return false; return NONOWNER_VIEW_ONLY ? (isOwner()||grantedEdit()) : ['editor','admin','owner'].includes(me.role); }
 function canDelete(){return NONOWNER_VIEW_ONLY ? isOwner() : isAdmin();}
-function canSeeCalendar(){return NONOWNER_VIEW_ONLY ? isOwner() : true;}
+function canSeeCalendar(){return NONOWNER_VIEW_ONLY ? (isOwner()||grantedEdit()) : true;}
 function canSeeAnalytics(){return NONOWNER_VIEW_ONLY ? isOwner() : true;}
 function biz(id){return BASE[id]||{};}
 function eff(id){const b=BASE[id]||{};return {lat:b.lat,lng:b.lng};}
@@ -1387,6 +1399,7 @@ async function proceedIntoApp(){
   }
   await loadData();
   showApp();
+  startAutoUpdate();
   // wait for the map container to actually get its size (it was hidden during login),
   // otherwise fitBounds computes against a 0-size viewport and zooms in absurdly.
   setTimeout(()=>{
@@ -1422,16 +1435,27 @@ async function loadUsers(){
 }
 function canManage(u){ if(u.id===me.id) return false; if(isOwner()) return true; return u.role==='viewer'||u.role==='editor'; }
 function roleOptions(cur){ const roles=isOwner()?['viewer','editor','admin','owner']:['viewer','editor']; return roles.map(r=>`<option ${r===cur?'selected':''} value="${r}">${r[0].toUpperCase()+r.slice(1)}</option>`).join(''); }
+// "Can edit" switch: owner-only control. Owners are always full-access; for everyone
+// else the owner toggles per-person edit rights (view-only <-> can edit).
+function editToggleHtml(u){
+  if(u.role==='owner') return `<span class="editpill on" title="Owners always have full access">Full access</span>`;
+  const on=!!u.can_edit;
+  if(isOwner()&&u.id!==me.id)
+    return `<button class="edittog ${on?'on':''}" data-edit="${u.id}" data-to="${on?'0':'1'}" title="${on?'Currently can edit — click to make view-only':'Currently view-only — click to allow editing'}">${on?'Can edit ✓':'View only'}</button>`;
+  return `<span class="editpill ${on?'on':''}">${on?'Can edit':'View only'}</span>`;
+}
 function renderUsers(users){
   $('usersList').innerHTML=users.map(u=>{
     const manage=canManage(u), mine=u.id===me.id;
     return `<div class="urow ${u.is_active?'':'inactive'}">
       <div class="uinfo"><b>${esc(u.full_name||'—')}</b>${mine?'<span class="you">you</span>':''}${(u.must_change_password&&u.is_active)?'<span class="upending">password not set yet</span>':''}<div class="uemail">${esc(u.email)}</div></div>
       <div class="urole">${manage?`<select class="roleSel" data-id="${u.id}">${roleOptions(u.role)}</select>`:`<span class="rolechip2">${esc(u.role)}</span>`}</div>
+      <div class="uedit">${editToggleHtml(u)}</div>
       <div class="uact">${manage?`<button class="btn ghost sm" data-reset="${u.id}">Reset pw</button><button class="btn ghost sm" data-active="${u.id}" data-to="${u.is_active?'0':'1'}">${u.is_active?'Deactivate':'Activate'}</button>`:''}</div>
     </div>`;
   }).join('')||'<div style="padding:10px;color:#8894a2">No users.</div>';
   $('usersList').querySelectorAll('.roleSel').forEach(s=>s.onchange=()=>setUserRole(s.dataset.id,s.value));
+  $('usersList').querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>setUserCanEdit(b.dataset.edit,b.dataset.to==='1'));
   $('usersList').querySelectorAll('[data-reset]').forEach(b=>b.onclick=()=>resetUserPw(b.dataset.reset));
   $('usersList').querySelectorAll('[data-active]').forEach(b=>b.onclick=()=>setUserActive(b.dataset.active,b.dataset.to==='1'));
 }
@@ -1464,6 +1488,11 @@ async function resetUserPw(id){
 async function setUserRole(id,role){
   const r=await invokeAdmin({action:'set-role',user_id:id,role});
   if(r.error){ alert(r.error); }
+  await loadUsers();
+}
+async function setUserCanEdit(id,val){
+  const r=await invokeAdmin({action:'set-can-edit',user_id:id,can_edit:val});
+  if(r.error){ alert(r.error); return; }
   await loadUsers();
 }
 async function setUserActive(id,active){
@@ -1505,6 +1534,101 @@ async function loadData(){
   for(const k in markers) delete markers[k];
   BUSINESSES.forEach(b=>makeMarker(b.id));
   buildFilterOptions(); applyFilters(); refreshStat();
+  lastDataSig=dataSigFrom(BUSINESSES,(cm||[]).length,(vs||[]).length,(ap||[]).length,(an||[]).length);
+}
+
+/* ===== auto-update: keep open tabs current without a manual refresh ===== */
+// (1) live data — re-pull every ~90s and on tab focus, re-rendering only when something
+//     actually changed and never while a panel/modal is open or the user is typing.
+// (2) new site version — if a new index.html has been deployed, offer a one-click refresh.
+let lastDataSig='', autoTimer=null, updateReady=false, pageTag=null;
+function dataSigFrom(bzArr,nCm,nVs,nAp,nAn){
+  return bzArr.map(x=>[x.id,x.name,x.lat,x.lng,x.level,x.city,x.type,x.address,x.phone,x.contact,
+    x.last_visit,x.first_visit,x.is_client,x.follow_up_on,x.cards,x.plaque,x.sign].join('|')).join('~')
+    +'#'+nCm+'#'+nVs+'#'+nAp+'#'+nAn;
+}
+async function silentRefresh(){
+  if(!me) return;
+  if(document.querySelector('.modalbg.open,.bigmodal.open')) return;   // don't yank the rug mid-task
+  if($('detail').classList.contains('open')) return;                  // someone's reading/editing a business
+  const ae=document.activeElement, tg=ae&&ae.tagName;
+  if(tg==='INPUT'||tg==='TEXTAREA'||tg==='SELECT') return;             // user is typing/filtering
+  let r;
+  try{
+    r=await Promise.all([
+      sb.from('businesses').select('*').order('name'),
+      sb.from('comments').select('*').order('created_at'),
+      sb.from('profiles').select('id,full_name,email,role'),
+      sb.from('visits').select('*').order('visited_on',{ascending:false}),
+      sb.from('appointments').select('*').order('scheduled_at'),
+      sb.from('agent_names').select('id,name').order('name')
+    ]);
+  }catch(e){ return; }
+  const [{data:bz,error:be},{data:cm},{data:pr},{data:vs},{data:ap},{data:an}]=r;
+  if(be) return;
+  const nb=(bz||[]).filter(b=>!b.hidden);
+  const nsig=dataSigFrom(nb,(cm||[]).length,(vs||[]).length,(ap||[]).length,(an||[]).length);
+  if(nsig===lastDataSig) return;                                      // nothing changed — no flicker
+  const scroll=$('list').scrollTop;
+  BUSINESSES=nb; for(const k in BASE) delete BASE[k]; BUSINESSES.forEach(b=>BASE[b.id]=b);
+  commentsByBiz={}; (cm||[]).forEach(c=>{(commentsByBiz[c.business_id]=commentsByBiz[c.business_id]||[]).push(c);});
+  profName={}; (pr||[]).forEach(p=>profName[p.id]=p.full_name||p.email);
+  AGENTS=(pr||[]).filter(p=>p.role!=='owner');
+  visitsByBiz={}; (vs||[]).forEach(v=>{(visitsByBiz[v.business_id]=visitsByBiz[v.business_id]||[]).push(v);});
+  APPTS=ap||[]; AGENT_NAMES=an||[];
+  cluster.clearLayers(); for(const k in markers) delete markers[k]; BUSINESSES.forEach(b=>makeMarker(b.id));
+  buildFilterOptions(); applyFilters(); refreshStat();
+  $('list').scrollTop=scroll;
+  lastDataSig=nsig;
+  liveToast('Updated with the latest changes');
+}
+// pick up a live change to MY own access (owner flipped my "Can edit" or role) without a re-login
+async function refreshMe(){
+  if(!me) return;
+  try{
+    const {data:p}=await sb.from('profiles').select('role,can_edit').eq('id',me.id).maybeSingle();
+    if(!p) return;
+    if(p.role!==me.role || !!p.can_edit!==!!me.can_edit){
+      me.role=p.role; me.can_edit=!!p.can_edit;
+      applyRoleUI();
+      if(activeId!=null && $('detail').classList.contains('open')){
+        const ae=document.activeElement, tg=ae&&ae.tagName;
+        if(tg!=='INPUT'&&tg!=='TEXTAREA'&&tg!=='SELECT') openDetail(activeId);   // re-render with new rights
+      }
+      liveToast(canEdit()?'You now have edit access':'Your access is now view-only');
+    }
+  }catch(e){}
+}
+async function checkVersion(){
+  try{
+    const res=await fetch(location.pathname+'?_v='+Date.now(),{method:'HEAD',cache:'no-store'});
+    const tag=res.headers.get('etag')||res.headers.get('last-modified');
+    if(!tag) return;
+    if(pageTag===null){ pageTag=tag; return; }                        // first sample = baseline
+    if(tag!==pageTag){ updateReady=true; if(document.hidden) location.reload(); else showUpdateBar(); }
+  }catch(e){}
+}
+function showUpdateBar(){
+  if($('updateBar')) return;
+  const d=document.createElement('div'); d.id='updateBar';
+  d.innerHTML='🔄 A newer version of the site is ready. <button id="updateNow">Refresh</button>';
+  document.body.appendChild(d);
+  $('updateNow').onclick=()=>location.reload();
+}
+let toastTimer=null;
+function liveToast(msg){
+  let t=$('liveToast');
+  if(!t){ t=document.createElement('div'); t.id='liveToast'; document.body.appendChild(t); }
+  t.textContent=msg; t.classList.add('show');
+  clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.classList.remove('show'),3000);
+}
+function startAutoUpdate(){
+  if(autoTimer) return;
+  autoTimer=setInterval(()=>{ checkVersion(); refreshMe(); silentRefresh(); }, 90000);
+  document.addEventListener('visibilitychange',()=>{
+    if(document.hidden){ if(updateReady) location.reload(); return; }
+    checkVersion(); refreshMe(); silentRefresh();
+  });
 }
 
 /* ===== map ===== */
