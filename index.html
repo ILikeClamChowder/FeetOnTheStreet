@@ -1856,10 +1856,58 @@ function renderBody(id,editing){
 }
 
 /* ===== writes ===== */
+// Build a clean geocoding query — don't re-append a city/state the address already has.
+function geoQuery(address,city){
+  let q=(address||'').trim(); if(!q) return '';
+  const esc=s=>s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  if(city && !new RegExp('\\b'+esc(city)+'\\b','i').test(q)) q+=', '+city;
+  if(!/\b(UT|Utah)\b/i.test(q)) q+=', UT';
+  return q;
+}
+// Address -> coordinates. Uses Google (the same Places endpoint the storefront photos
+// already use, so it works wherever photos do) and falls back to OpenStreetMap.
 async function geocodeAddress(q){
-  try{const url='https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=us&q='+encodeURIComponent(q);
+  q=(q||'').trim(); if(!q) return null;
+  if(gkey){
+    try{
+      const r=await fetch('https://places.googleapis.com/v1/places:searchText',{method:'POST',
+        headers:{'Content-Type':'application/json','X-Goog-Api-Key':gkey,'X-Goog-FieldMask':'places.location,places.formattedAddress'},
+        body:JSON.stringify({textQuery:q,regionCode:'US'})});
+      const j=await r.json();
+      const p=j.places&&j.places[0];
+      if(p&&p.location) return {lat:p.location.latitude,lng:p.location.longitude,formatted:p.formattedAddress||null};
+    }catch(e){}
+  }
+  try{
+    const url='https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=us&q='+encodeURIComponent(q);
     const r=await fetch(url,{headers:{'Accept':'application/json'}});const j=await r.json();
-    if(j&&j[0]) return {lat:+j[0].lat,lng:+j[0].lon};}catch(e){}
+    if(j&&j[0]) return {lat:+j[0].lat,lng:+j[0].lon,formatted:j[0].display_name||null};
+  }catch(e){}
+  return null;
+}
+// Coordinates -> street address (for when a pin is moved). Google's geocoding web service
+// isn't CORS-friendly, so this uses OpenStreetMap reverse, then Photon as a backup.
+async function reverseGeocode(lat,lng){
+  try{
+    const r=await fetch('https://nominatim.openstreetmap.org/reverse?format=jsonv2&addressdetails=1&lat='+lat+'&lon='+lng,{headers:{'Accept':'application/json'}});
+    const j=await r.json(), a=j&&j.address;
+    if(a){
+      const road=[a.house_number,a.road].filter(Boolean).join(' ');
+      const city=a.city||a.town||a.village||a.hamlet||a.suburb||'';
+      const s=[road, city, a.state, a.postcode].filter(Boolean).join(', ');
+      if(s) return s;
+    }
+    if(j&&j.display_name) return j.display_name.replace(/,?\s*United States.*$/,'').replace(/,\s*USA$/,'');
+  }catch(e){}
+  try{
+    const r=await fetch('https://photon.komoot.io/reverse?lat='+lat+'&lon='+lng);
+    const j=await r.json(), p=j&&j.features&&j.features[0]&&j.features[0].properties;
+    if(p){
+      const road=[p.housenumber,p.street||p.name].filter(Boolean).join(' ');
+      const s=[road, p.city, p.state, p.postcode].filter(Boolean).join(', ');
+      if(s) return s;
+    }
+  }catch(e){}
   return null;
 }
 function parseCoords(str){
@@ -1887,7 +1935,7 @@ async function saveEdit(id){
   if(pasted){ patch.lat=pasted.lat; patch.lng=pasted.lng; }
   else if(patch.address && (BASE[id].lat==null || patch.address!==oldAddr)){
     const btn=g('saveEdit'); if(btn){btn.textContent='Locating…';btn.disabled=true;}
-    const co=await geocodeAddress(patch.address+(patch.city?(', '+patch.city):'')+', UT');
+    const co=await geocodeAddress(geoQuery(patch.address,patch.city));
     if(co){ patch.lat=co.lat; patch.lng=co.lng; }
     else alert("Saved, but couldn't find that address on the map. Paste coordinates or use “Click map to place pin”.");
   }
@@ -1898,10 +1946,16 @@ async function saveEdit(id){
 }
 async function saveCoords(id,lat,lng){
   if(!canEdit()) return;
-  const {error}=await sb.from('businesses').update({lat,lng}).eq('id',id);
+  liveToast('Pin moved — looking up the address…');
+  const patch={lat,lng};
+  const addr=await reverseGeocode(lat,lng);      // moving a pin rewrites the address to match
+  if(addr) patch.address=addr;
+  const {error}=await sb.from('businesses').update(patch).eq('id',id);
   if(error){ alert('Could not move pin: '+error.message); return; }
-  BASE[id].lat=lat; BASE[id].lng=lng; ensureMarker(id); refreshStat();
+  Object.assign(BASE[id],patch); ensureMarker(id);
+  buildFilterOptions(); applyFilters(); refreshStat();
   if(activeId===id) renderBody(id,false);
+  liveToast(addr ? ('Address updated: '+addr) : 'Pin moved (couldn’t auto-find an address here)');
 }
 async function addComment(id){
   const t=$('cmtText').value.trim(); if(!t) return;
@@ -1919,7 +1973,7 @@ async function addBusiness(){
     address:$('abAddress').value.trim()||null,phone:$('abPhone').value.trim()||null,contact:$('abContact').value.trim()||null,
     history:$('abHistory').value.trim()||null,created_by:me.id};
   $('abSave').disabled=true; $('abSave').textContent='Adding…';
-  if(rec.address){ const co=await geocodeAddress(rec.address+(rec.city?(', '+rec.city):'')+', UT'); if(co){rec.lat=co.lat;rec.lng=co.lng;} }
+  if(rec.address){ const co=await geocodeAddress(geoQuery(rec.address,rec.city)); if(co){rec.lat=co.lat;rec.lng=co.lng;} }
   const {data,error}=await sb.from('businesses').insert(rec).select().single();
   $('abSave').disabled=false; $('abSave').textContent='Add business';
   if(error){ $('abErr').textContent=error.message; return; }
