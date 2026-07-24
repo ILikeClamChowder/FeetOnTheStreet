@@ -1144,7 +1144,8 @@ svg.leaflet-image-layer.leaflet-interactive path {
     <h3>Add a business</h3>
     <p>New businesses are shared with the whole team. Address is looked up on the map automatically.</p>
     <label>Business name *</label><input id="abName">
-    <label>Type</label><input id="abType" placeholder="Medical, Restaurant, Service…">
+    <label>Type</label><input id="abType" list="typeDL" autocomplete="off" placeholder="Pick a category or type your own…">
+    <datalist id="typeDL"></datalist>
     <label>Level</label>
     <select id="abLevel"><option value="">(none)</option><option>A</option><option>A/B</option><option>B</option><option>B/C</option><option>C</option></select>
     <label>City</label><input id="abCity">
@@ -1301,6 +1302,14 @@ function customAgentChips(){   // deletable chips for typed-in (account-less) na
     `<span class="nchip" data-fill="${attr(a.name)}">${esc(a.name)}<span class="nx" data-delname="${a.id}" title="Delete this name">×</span></span>`).join('')}</div>`;
 }
 
+// Business categories for the Type dropdown. Users can still type a new one — any type
+// already in the data is merged in below, so custom entries stick around as options.
+const TYPE_OPTIONS=['Auto','Beauty','Daycare','Dental','Entertainment','Finance','Insurance','Medical','Pharmacy','Restaurant','Service'];
+function fillTypeDL(){
+  const set=new Set(TYPE_OPTIONS);
+  BUSINESSES.forEach(b=>{ if(b.type) set.add(b.type); });
+  const dl=$('typeDL'); if(dl) dl.innerHTML=[...set].sort((a,b)=>a.localeCompare(b)).map(t=>`<option value="${attr(t)}"></option>`).join('');
+}
 const LEVEL_COLOR={'A':'#1b8a3f','A/B':'#5a9e1e','B':'#e58a00','B/C':'#d1590c','C':'#c62828'};
 function levelColor(l){return LEVEL_COLOR[l]||'#9aa6b2';}
 const LEVEL_ORDER={'A':0,'A/B':1,'B':2,'B/C':3,'C':4,'':9};
@@ -1533,7 +1542,7 @@ async function loadData(){
   cluster.clearLayers();
   for(const k in markers) delete markers[k];
   BUSINESSES.forEach(b=>makeMarker(b.id));
-  buildFilterOptions(); applyFilters(); refreshStat();
+  buildFilterOptions(); fillTypeDL(); applyFilters(); refreshStat();
   lastDataSig=dataSigFrom(BUSINESSES,(cm||[]).length,(vs||[]).length,(ap||[]).length,(an||[]).length);
 }
 
@@ -1577,7 +1586,7 @@ async function silentRefresh(){
   visitsByBiz={}; (vs||[]).forEach(v=>{(visitsByBiz[v.business_id]=visitsByBiz[v.business_id]||[]).push(v);});
   APPTS=ap||[]; AGENT_NAMES=an||[];
   cluster.clearLayers(); for(const k in markers) delete markers[k]; BUSINESSES.forEach(b=>makeMarker(b.id));
-  buildFilterOptions(); applyFilters(); refreshStat();
+  buildFilterOptions(); fillTypeDL(); applyFilters(); refreshStat();
   $('list').scrollTop=scroll;
   lastDataSig=nsig;
   liveToast('Updated with the latest changes');
@@ -1762,7 +1771,7 @@ function renderBody(id,editing){
     <div class="sect edit">
       <h3>Edit details</h3>
       <div class="field"><span class="lab">Name</span><input id="e_name" value="${attr(b.name)}"></div>
-      <div class="field"><span class="lab">Type</span><input id="e_type" value="${attr(b.type)}"></div>
+      <div class="field"><span class="lab">Type</span><input id="e_type" list="typeDL" autocomplete="off" value="${attr(b.type)}"></div>
       <div class="field"><span class="lab">Level</span><select id="e_level">${['','A','A/B','B','B/C','C'].map(l=>`<option ${l===(b.level||'')?'selected':''} value="${l}">${l||'(none)'}</option>`).join('')}</select></div>
       <div class="field"><span class="lab">City</span><input id="e_city" value="${attr(b.city)}"></div>
       <div class="field"><span class="lab">Address</span><input id="e_address" value="${attr(b.address)}"></div>
@@ -1864,30 +1873,48 @@ function geoQuery(address,city){
   if(!/\b(UT|Utah)\b/i.test(q)) q+=', UT';
   return q;
 }
-// Address -> coordinates. Uses Google (the same Places endpoint the storefront photos
-// already use, so it works wherever photos do) and falls back to OpenStreetMap.
+// Address -> coordinates. Tries, in order: Google Geocoding API (best for street
+// addresses), Google Places text search, then the keyless OpenStreetMap + Photon
+// services — so it still works if a service is down/throttled or the key is absent.
 async function geocodeAddress(q){
   q=(q||'').trim(); if(!q) return null;
   if(gkey){
     try{
+      const r=await fetch('https://maps.googleapis.com/maps/api/geocode/json?region=us&address='+encodeURIComponent(q)+'&key='+encodeURIComponent(gkey));
+      const j=await r.json();
+      if(j.status==='OK' && j.results && j.results[0]){
+        const g=j.results[0]; return {lat:g.geometry.location.lat,lng:g.geometry.location.lng,formatted:g.formatted_address||null};
+      }
+    }catch(e){}
+    try{
       const r=await fetch('https://places.googleapis.com/v1/places:searchText',{method:'POST',
         headers:{'Content-Type':'application/json','X-Goog-Api-Key':gkey,'X-Goog-FieldMask':'places.location,places.formattedAddress'},
         body:JSON.stringify({textQuery:q,regionCode:'US'})});
-      const j=await r.json();
-      const p=j.places&&j.places[0];
+      const j=await r.json(); const p=j.places&&j.places[0];
       if(p&&p.location) return {lat:p.location.latitude,lng:p.location.longitude,formatted:p.formattedAddress||null};
     }catch(e){}
   }
   try{
-    const url='https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=us&q='+encodeURIComponent(q);
-    const r=await fetch(url,{headers:{'Accept':'application/json'}});const j=await r.json();
-    if(j&&j[0]) return {lat:+j[0].lat,lng:+j[0].lon,formatted:j[0].display_name||null};
+    const r=await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=us&q='+encodeURIComponent(q),{headers:{'Accept':'application/json'}});
+    const j=await r.json(); if(j&&j[0]) return {lat:+j[0].lat,lng:+j[0].lon,formatted:j[0].display_name||null};
+  }catch(e){}
+  try{
+    const r=await fetch('https://photon.komoot.io/api/?limit=1&q='+encodeURIComponent(q));
+    const j=await r.json(); const f=j&&j.features&&j.features[0];
+    if(f&&f.geometry&&f.geometry.coordinates) return {lat:f.geometry.coordinates[1],lng:f.geometry.coordinates[0],formatted:null};
   }catch(e){}
   return null;
 }
 // Coordinates -> street address (for when a pin is moved). Google's geocoding web service
 // isn't CORS-friendly, so this uses OpenStreetMap reverse, then Photon as a backup.
 async function reverseGeocode(lat,lng){
+  if(gkey){
+    try{
+      const r=await fetch('https://maps.googleapis.com/maps/api/geocode/json?latlng='+lat+','+lng+'&key='+encodeURIComponent(gkey));
+      const j=await r.json();
+      if(j.status==='OK' && j.results && j.results[0]) return j.results[0].formatted_address.replace(/,\s*USA$/,'');
+    }catch(e){}
+  }
   try{
     const r=await fetch('https://nominatim.openstreetmap.org/reverse?format=jsonv2&addressdetails=1&lat='+lat+'&lon='+lng,{headers:{'Accept':'application/json'}});
     const j=await r.json(), a=j&&j.address;
